@@ -6,7 +6,8 @@ services:
     ports:
       - "8081:8081"
     environment:
-      - SPRING_APPLICATION_JSON={"server":{"port":8081},"management":{"endpoints":{"web":{"exposure":{"include":"health,info"}}}}}
+      SPRING_APPLICATION_JSON: >
+        {"server":{"port":8081},"management":{"endpoints":{"web":{"exposure":{"include":"health,info"}}}}}
     networks:
       - prog3360-net
     healthcheck:
@@ -22,8 +23,9 @@ services:
     ports:
       - "8082:8082"
     environment:
-      - SPRING_APPLICATION_JSON={"server":{"port":8082},"management":{"endpoints":{"web":{"exposure":{"include":"health,info"}}}}}
-      - PRODUCT_SERVICE_BASE_URL=http://product-service:8081
+      SPRING_APPLICATION_JSON: >
+        {"server":{"port":8082},"management":{"endpoints":{"web":{"exposure":{"include":"health,info"}}}}}
+      PRODUCT_SERVICE_BASE_URL: "http://product-service:8081"
     networks:
       - prog3360-net
     depends_on:
