@@ -1,6 +1,6 @@
 # prog3360-assignment1
 Microservices CI/CD pipeline – PROG3360
-for self reference
+for self reference and easy pastes
 
 dependencies for both services:
 <dependency>
