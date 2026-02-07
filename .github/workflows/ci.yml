@@ -53,29 +53,58 @@ jobs:
         run: docker compose build
 
       - name: Start services with Docker Compose
-        run: docker compose up -d
-
-      - name: Wait for services to be healthy
         run: |
-          echo "Waiting for Product Service..."
-          for i in {1..30}; do
-            if curl -fsS http://localhost:8081/actuator/health > /dev/null; then
-              echo "Product Service is UP"
-              break
-            fi
-            sleep 2
-          done
+          docker compose up -d || true
 
-          echo "Waiting for Order Service..."
-          for i in {1..30}; do
-            if curl -fsS http://localhost:8082/actuator/health > /dev/null; then
-              echo "Order Service is UP"
-              break
-            fi
-            sleep 2
-          done
+      # ---- DEBUG BLOCK (always prints, even if unhealthy) ----
+      - name: Show compose status
+        if: always()
+        run: |
+          docker compose ps -a || true
 
-          docker compose ps
+      - name: Debug health + logs (product-service)
+        if: always()
+        run: |
+          echo "=== product-service health (docker inspect) ==="
+          docker inspect product-service --format '{{json .State.Health}}' || true
+          echo "=== product-service logs (tail 200) ==="
+          docker compose logs --no-color --tail=200 product-service || true
+
+      - name: Debug health + logs (order-service)
+        if: always()
+        run: |
+          echo "=== order-service health (docker inspect) ==="
+          docker inspect order-service --format '{{json .State.Health}}' || true
+          echo "=== order-service logs (tail 200) ==="
+          docker compose logs --no-color --tail=200 order-service || true
+
+      - name: Wait for product-service to be healthy (fail with debug already printed)
+        run: |
+          for i in {1..30}; do
+            STATUS=$(docker inspect -f '{{.State.Health.Status}}' product-service 2>/dev/null || echo "unknown")
+            echo "product-service health: $STATUS"
+            if [ "$STATUS" = "healthy" ]; then
+              echo "product-service is healthy"
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "product-service did not become healthy"
+          exit 1
+
+      - name: Wait for order-service to be healthy
+        run: |
+          for i in {1..30}; do
+            STATUS=$(docker inspect -f '{{.State.Health.Status}}' order-service 2>/dev/null || echo "unknown")
+            echo "order-service health: $STATUS"
+            if [ "$STATUS" = "healthy" ]; then
+              echo "order-service is healthy"
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "order-service did not become healthy"
+          exit 1
 
       - name: Integration Test - Product CRUD + Order flow
         run: |
