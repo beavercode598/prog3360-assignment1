@@ -1,0 +1,128 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build-test:
+    name: Build & Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+          cache: 'maven'
+
+      - name: Build & Test Product Service
+        run: |
+          cd product-service
+          mvn -B clean test
+
+      - name: Build & Test Order Service
+        run: |
+          cd order-service
+          mvn -B clean test
+
+      - name: Upload test reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: |
+            product-service/target/surefire-reports
+            order-service/target/surefire-reports
+
+  docker-build:
+    name: Docker Build & Integration Test
+    runs-on: ubuntu-latest
+    needs: build-test
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build Docker images
+        run: docker compose build
+
+      - name: Start services with Docker Compose
+        run: docker compose up -d
+
+      - name: Wait for services to be healthy
+        run: |
+          echo "Waiting for Product Service..."
+          for i in {1..30}; do
+            if curl -fsS http://localhost:8081/actuator/health > /dev/null; then
+              echo "Product Service is UP"
+              break
+            fi
+            sleep 2
+          done
+
+          echo "Waiting for Order Service..."
+          for i in {1..30}; do
+            if curl -fsS http://localhost:8082/actuator/health > /dev/null; then
+              echo "Order Service is UP"
+              break
+            fi
+            sleep 2
+          done
+
+          docker compose ps
+
+      - name: Integration Test - Product CRUD + Order flow
+        run: |
+          set -e
+
+          echo "Health checks"
+          curl -fsS http://localhost:8081/actuator/health
+          curl -fsS http://localhost:8082/actuator/health
+
+          echo "Create product Milk"
+          CREATE_PRODUCT_RESPONSE=$(curl -fsS -X POST http://localhost:8081/api/products \
+            -H "Content-Type: application/json" \
+            -d '{"name":"Milk","price":4.99,"quantity":10}')
+          echo "$CREATE_PRODUCT_RESPONSE"
+
+          echo "List products"
+          curl -fsS http://localhost:8081/api/products
+
+          echo "Get product id=1 (adjust if your IDs differ)"
+          curl -fsS http://localhost:8081/api/products/1
+
+          echo "Create order (productId=1, quantity=2)"
+          CREATE_ORDER_RESPONSE=$(curl -fsS -X POST http://localhost:8082/api/orders \
+            -H "Content-Type: application/json" \
+            -d '{"productId":1,"quantity":2}')
+          echo "$CREATE_ORDER_RESPONSE"
+
+          echo "List orders"
+          curl -fsS http://localhost:8082/api/orders
+
+          echo "Get order id=1"
+          curl -fsS http://localhost:8082/api/orders/1
+
+          echo "Insufficient quantity test (should fail)"
+          set +e
+          curl -fsS -X POST http://localhost:8082/api/orders \
+            -H "Content-Type: application/json" \
+            -d '{"productId":1,"quantity":999}'
+          EXIT_CODE=$?
+          set -e
+          if [ $EXIT_CODE -eq 0 ]; then
+            echo "Expected failure for insufficient quantity, but request succeeded"
+            exit 1
+          else
+            echo "Insufficient quantity request failed as expected"
+          fi
+
+      - name: Shut down containers
+        if: always()
+        run: docker compose down
