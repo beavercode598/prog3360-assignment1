@@ -1,4 +1,57 @@
 services:
+  postgres:
+    image: postgres:15
+    container_name: unleash-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-unleash_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-your_secure_password}
+      POSTGRES_DB: ${POSTGRES_DB:-unleash}
+    ports:
+      - "5433:5432"
+    networks:
+      - prog3360-net
+    volumes:
+      - unleash_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-unleash_user} -d ${POSTGRES_DB:-unleash}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  unleash-server:
+    image: unleashorg/unleash-server:latest
+    container_name: unleash-server
+    environment:
+      DATABASE_HOST: postgres
+      DATABASE_NAME: ${POSTGRES_DB:-unleash}
+      DATABASE_USERNAME: ${POSTGRES_USER:-unleash_user}
+      DATABASE_PASSWORD: ${POSTGRES_PASSWORD:-your_secure_password}
+      DATABASE_SSL: "false"
+
+      # seeded on FIRST startup of an empty DB only
+      INIT_ADMIN_API_TOKENS: "*:*.unleash-insecure-admin-api-token"
+      INIT_BACKEND_API_TOKENS: "default:development.unleash-insecure-api-token"
+
+      UNLEASH_URL: "http://localhost:4242"
+    ports:
+      - "4242:4242"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - prog3360-net
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "require('http').get('http://localhost:4242/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1));"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
   product-service:
     build:
       context: ./product-service
@@ -8,8 +61,13 @@ services:
     environment:
       SPRING_APPLICATION_JSON: >
         {"server":{"port":8081}}
+      UNLEASH_API_URL: "${UNLEASH_API_URL:-http://unleash-server:4242/api}"
+      UNLEASH_API_TOKEN: "${UNLEASH_API_TOKEN}"
     networks:
       - prog3360-net
+    depends_on:
+      unleash-server:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8081/actuator/health"]
       interval: 10s
@@ -26,10 +84,14 @@ services:
       SPRING_APPLICATION_JSON: >
         {"server":{"port":8082}}
       PRODUCT_SERVICE_BASE_URL: "http://product-service:8081"
+      UNLEASH_API_URL: "${UNLEASH_API_URL:-http://unleash-server:4242/api}"
+      UNLEASH_API_TOKEN: "${UNLEASH_API_TOKEN}"
     networks:
       - prog3360-net
     depends_on:
       product-service:
+        condition: service_healthy
+      unleash-server:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8082/actuator/health"]
@@ -40,3 +102,6 @@ services:
 networks:
   prog3360-net:
     driver: bridge
+
+volumes:
+  unleash_pg_data:
