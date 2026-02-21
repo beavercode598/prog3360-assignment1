@@ -7,8 +7,10 @@ on:
     branches: [ "assignment2-feature-flags" ]
 
 jobs:
+
   unit-tests:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
 
@@ -35,15 +37,19 @@ jobs:
             product-service/target/surefire-reports
             order-service/target/surefire-reports
 
+
   unleash-integration:
     runs-on: ubuntu-latest
     needs: unit-tests
+
     steps:
       - uses: actions/checkout@v4
 
+      # Start infrastructure (postgres + unleash only)
       - name: Start postgres + unleash
         run: docker compose up -d postgres unleash-server
 
+      # Wait for Unleash to be healthy
       - name: Wait for Unleash health
         run: |
           for i in {1..30}; do
@@ -54,34 +60,50 @@ jobs:
             echo "Waiting for Unleash... ($i/30)"
             sleep 2
           done
-          echo "Unleash did not become healthy in time" && exit 1
+          echo "Unleash did not become healthy in time"
+          exit 1
 
-      - name: Init Unleash flags + create backend token
+      # Initialize flags and backend token
+      - name: Init Unleash flags
         run: |
           chmod +x scripts/ci-unleash-init.sh
           scripts/ci-unleash-init.sh
 
-      - name: Verify UNLEASH_API_TOKEN secret is present (masked)
+      # Ensure secret exists
+      - name: Verify UNLEASH_API_TOKEN secret
         env:
           UNLEASH_API_TOKEN: ${{ secrets.UNLEASH_API_TOKEN }}
         run: |
           if [ -z "$UNLEASH_API_TOKEN" ]; then
-            echo "UNLEASH_API_TOKEN is EMPTY" && exit 1
+            echo "UNLEASH_API_TOKEN is EMPTY"
+            exit 1
           fi
-          echo "UNLEASH_API_TOKEN is set (length=${#UNLEASH_API_TOKEN})"
+          echo "UNLEASH_API_TOKEN present (length=${#UNLEASH_API_TOKEN})"
 
-      - name: Start microservices (with UNLEASH_API_TOKEN)
+      
+      - name: Create .env for docker compose
         env:
           UNLEASH_API_TOKEN: ${{ secrets.UNLEASH_API_TOKEN }}
+        run: |
+          cat > .env << EOF
+          UNLEASH_API_URL=http://unleash-server:4242/api
+          UNLEASH_API_TOKEN=${UNLEASH_API_TOKEN}
+          EOF
+          echo ".env created"
+
+      # Start microservices
+      - name: Start microservices
         run: docker compose up -d --build product-service order-service
 
+      # Verify UNLEASH vars inside containers
       - name: Verify containers see UNLEASH vars
         run: |
-          echo "---- product-service UNLEASH env ----"
-          docker exec product-service sh -lc 'printenv | grep -E "^UNLEASH_" || true'
-          echo "---- order-service UNLEASH env ----"
-          docker exec order-service sh -lc 'printenv | grep -E "^UNLEASH_" || true'
+          echo "---- product-service ----"
+          docker exec product-service sh -lc 'printenv | grep UNLEASH_ || true'
+          echo "---- order-service ----"
+          docker exec order-service sh -lc 'printenv | grep UNLEASH_ || true'
 
+      # Wait for services to be healthy
       - name: Wait for microservices health
         run: |
           for i in {1..30}; do
@@ -96,22 +118,22 @@ jobs:
               exit 0
             fi
 
-            echo "Waiting for services... ($i/30) product=$P_OK order=$O_OK"
+            echo "Waiting for services... ($i/30)"
             sleep 2
           done
 
-          echo "Services did not become healthy in time"
-          echo "---- product-service logs ----"
-          docker logs --tail=200 product-service || true
-          echo "---- order-service logs ----"
-          docker logs --tail=200 order-service || true
+          echo "Services failed to become healthy"
+          docker logs product-service || true
+          docker logs order-service || true
           exit 1
 
+      # Run integration tests
       - name: Run feature-flag integration tests
         run: |
           chmod +x scripts/ci-integration-tests.sh
           scripts/ci-integration-tests.sh
 
+      # Always shut down
       - name: Shut down containers
         if: always()
         run: docker compose down -v
